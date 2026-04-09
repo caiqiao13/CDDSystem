@@ -1,0 +1,16 @@
+<RCC>
+    <qresource prefix="/icon">
+        <file>github.png</file>
+        <file>favicon.png</file>
+        <file>JYD.ico</file>
+        <file>ball-camera-full.png</file>
+        <file>charutupian.png</file>
+        <file>shipin.png</file>
+        <file>default_image.png</file>
+        <file>default_image.jpg</file>
+    </qresource>
+    <qresource prefix="/gif">
+        <file>loading.gif</file>
+    </qresource>
+</RCC>
+
