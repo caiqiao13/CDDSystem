@@ -70,6 +70,35 @@ bool DBManager::insertRecord(const DetectionRecord& record) {
     return true;
 }
 
+QList<DetectionRecord> DBManager::fetchRecentRecords(int limit) {
+    QList<DetectionRecord> list;
+    if (!db.isOpen()) {
+        return list;
+    }
+    int lim = limit;
+    if (lim < 1) lim = 1;
+    if (lim > 10000) lim = 10000;
+    QSqlQuery query(db);
+    const QString sql = QString(
+        "SELECT image_path, defect_type, confidence, bounding_box, detection_time "
+        "FROM detection_logs ORDER BY id DESC LIMIT %1"
+    ).arg(lim);
+    if (!query.exec(sql)) {
+        qDebug() << "Error: Failed to fetch records." << query.lastError().text();
+        return list;
+    }
+    while (query.next()) {
+        DetectionRecord r;
+        r.image_path = query.value(0).toString();
+        r.defect_type = query.value(1).toString();
+        r.confidence = query.value(2).toFloat();
+        r.bounding_box = query.value(3).toString();
+        r.detection_time = query.value(4).toString();
+        list.append(r);
+    }
+    return list;
+}
+
 void DBManager::closeDatabase() {
     if (db.isOpen()) {
         db.close();

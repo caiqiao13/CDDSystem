@@ -1,4 +1,6 @@
-﻿#include <QFileDialog>
+#include <QFileDialog>
+#include <QDir>
+#include <QFile>
 #include <detect_thread.h>
 #include <QMessageBox>
 #include <QThread>
@@ -8,6 +10,7 @@
 #include "inference.h"
 #include "db_manager.h"
 #include <QDateTime>
+#include <QMetaObject>
 
 std::atomic<bool> DetectThreadBase::STOP{false};
 std::atomic<int> DetectThreadBase::ID{0};
@@ -216,7 +219,6 @@ void CameraDetectThread::do_detect() {
 			emit this->detectionLog("Error: 摄像头帧为空");
 			break;
 		}
-		cv::flip(frame, frame, cv::RotateFlags::ROTATE_180);
 		std::vector<Detection> results = this->run_detection(frame);
 		QImage image = commons::cvMatToQImage(frame);
 		emit this->frameReady(image);
@@ -234,6 +236,73 @@ void CameraDetectThread::do_detect() {
 	cap.release();
 }
 
+const int BatchImageDetectThread::ID = 4;
+BatchImageDetectThread::BatchImageDetectThread(MainWindow& mw, bool label, const QString& folder)
+	: DetectThreadBase(mw, label), folder(folder)
+{
+}
+
+int BatchImageDetectThread::get_detect_id()
+{
+	return BatchImageDetectThread::ID;
+}
+
+void BatchImageDetectThread::do_detect()
+{
+	QDir dir(this->folder);
+	if (!dir.exists()) {
+		emit this->detectionLog("Error: 文件夹不存在 " + this->folder);
+		return;
+	}
+	QStringList filters;
+	filters << "*.png" << "*.jpg" << "*.jpeg" << "*.bmp";
+	QStringList files = dir.entryList(filters, QDir::Files, QDir::Name);
+	if (files.isEmpty()) {
+		emit this->detectionLog("Error: 文件夹内无支持的图片 (*.png *.jpg *.jpeg *.bmp)");
+		return;
+	}
+	if (!this->main_window->check_model()) {
+		emit this->detectionLog("Error: 未检测到模型");
+		return;
+	}
+	emit this->detectionLog(QString("批量检测开始，共 %1 张").arg(files.size()));
+	int done = 0;
+	for (const QString& name : files) {
+		if (DetectThreadBase::STOP) {
+			emit this->detectionLog("批量检测已停止");
+			break;
+		}
+		QString path = dir.filePath(name);
+		QFile imgFile(path);
+		if (!imgFile.open(QIODevice::ReadOnly)) {
+			emit this->detectionLog("Error: 打开图片失败 " + path);
+			continue;
+		}
+		QByteArray imgData = imgFile.readAll();
+		std::vector<char> buffer(imgData.begin(), imgData.end());
+		cv::Mat frame = cv::imdecode(buffer, cv::IMREAD_COLOR);
+		if (frame.empty()) {
+			emit this->detectionLog("Error: 解码图片失败 " + path);
+			continue;
+		}
+		std::vector<Detection> results = this->run_detection(frame);
+		QImage image = commons::cvMatToQImage(frame);
+		emit this->frameReady(image);
+		for (const auto& det : results) {
+			DetectionRecord record;
+			record.image_path = path;
+			record.defect_type = QString::fromStdString(det.className);
+			record.confidence = det.confidence;
+			record.bounding_box = QString("%1,%2,%3,%4").arg(det.box.x).arg(det.box.y).arg(det.box.width).arg(det.box.height);
+			record.detection_time = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
+			emit this->recordReady(record);
+		}
+		done++;
+		emit this->detectionLog(QString("批量进度 %1/%2: %3").arg(done).arg(files.size()).arg(name));
+	}
+	emit this->detectionLog(QString("批量检测结束，已处理 %1 张").arg(done));
+}
+
 WarmUpThread::WarmUpThread(MainWindow& mw, const QString& path, float iou_thres, float conf_thres, const cv::Size& input_shape)
 	:main_window(&mw), path(path), iou_thres(iou_thres), conf_thres(conf_thres), input_shape(input_shape)
 {
@@ -247,7 +316,13 @@ void WarmUpThread::run()
 		inference.reset(new Inference());
 	}
 	emit this->main_window->start_loading_movie_signal();
-	inference->loadOnnxNetwork(this->path.toStdString(), this->input_shape, true);
+	if (!inference->loadOnnxNetwork(this->path.toStdString(), this->input_shape, true)) {
+		this->main_window->inference.reset();
+		QMetaObject::invokeMethod(this->main_window, "append_log", Qt::QueuedConnection,
+			Q_ARG(QString, "Error: ONNX 模型加载失败，请检查权重文件"));
+		emit this->main_window->stop_loading_movie_signal();
+		return;
+	}
 	inference->modelNMSThreshold = this->iou_thres;
 	inference->modelScoreThreshold = this->conf_thres;
 	cv::Mat zero = cv::Mat::zeros(this->input_shape, CV_8UC3);

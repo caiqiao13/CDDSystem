@@ -68,6 +68,16 @@ public:
 	int get_detect_id();
 };
 
+class BatchImageDetectThread : public DetectThreadBase {
+private:
+	QString folder;
+public:
+	const static int ID;
+	BatchImageDetectThread(MainWindow& mw, bool label, const QString& folder);
+	void do_detect();
+	int get_detect_id();
+};
+
 // ...
 
 

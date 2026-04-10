@@ -194,6 +194,22 @@ background-color: rgba(48,148,243,80);}</string>
               </property>
              </widget>
             </item>
+            <item>
+             <widget class="QPushButton" name="batch_folder_button">
+              <property name="minimumSize">
+               <size>
+                <width>56</width>
+                <height>28</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>批量检测文件夹内图片</string>
+              </property>
+              <property name="text">
+               <string>批量</string>
+              </property>
+             </widget>
+            </item>
            </layout>
           </item>
           <item row="1" column="0">
@@ -326,6 +342,13 @@ background-color: rgba(48,148,243,80);}</string>
            <widget class="QPushButton" name="config_db_button">
             <property name="text">
              <string>配置数据库</string>
+            </property>
+           </widget>
+          </item>
+          <item row="7" column="0" colspan="2">
+           <widget class="QPushButton" name="history_records_button">
+            <property name="text">
+             <string>检测记录</string>
             </property>
            </widget>
           </item>

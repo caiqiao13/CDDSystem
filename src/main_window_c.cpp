@@ -17,7 +17,9 @@
 #include "detect_thread.h"
 #include "db_manager.h"
 #include "db_config_dialog.h"
+#include "history_dialog.h"
 #include <QSettings>
+#include <QDialog>
 
 MainWindow::MainWindow()
 {
@@ -62,10 +64,32 @@ MainWindow::MainWindow()
 	this->reset_conf_slot();
     
     
-	this->refresh_model_list();   // 刷新模型列表
-	emit this->ui.model_select->activated(0);  // 激活第一个模型
+	this->refresh_model_list();
+	this->select_default_model();
     this->show();
 
+}
+
+void MainWindow::select_default_model()
+{
+	int idx = this->ui.model_select->findText("ceramic_defect.onnx");
+	if (idx < 0) {
+		for (int i = 0; i < this->ui.model_select->count(); ++i) {
+			const QString t = this->ui.model_select->itemText(i);
+			if (t.endsWith(".onnx", Qt::CaseInsensitive)) {
+				idx = i;
+				break;
+			}
+		}
+	}
+	if (idx < 0 && this->ui.model_select->count() > 1) {
+		idx = 1;
+	}
+	if (idx >= 0 && idx < this->ui.model_select->count()) {
+		this->ui.model_select->setCurrentIndex(idx);
+		this->current_weight_index = -1;
+		this->model_select_slot(idx);
+	}
 }
 
 MainWindow::~MainWindow()
@@ -98,19 +122,35 @@ void MainWindow::show_img(QPixmap&& pixmap) {
     this->show_img(pixmap);
 }
 
+static void wait_and_clear_background_thread(MainWindow* mw)
+{
+	if (!mw->global_threading) {
+		return;
+	}
+	if (qobject_cast<DetectThreadBase*>(mw->global_threading.get())) {
+		DetectThreadBase::stop();
+	}
+	mw->global_threading->wait();
+	mw->global_threading.reset();
+}
+
 bool prepare_thread(int thread_id, MainWindow* mw) {
-    if (DetectThreadBase::ID == thread_id) {
-		// ...
-        return true;
-    }
-    else if (DetectThreadBase::ID != 0) {
-        // ...
-        DetectThreadBase::stop();
-        if (mw->global_threading) {
-            mw->global_threading->wait();
-        }
-    }
-    return false;
+	if (DetectThreadBase::ID == thread_id) {
+		DetectThreadBase::stop();
+		if (mw->global_threading) {
+			mw->global_threading->wait();
+			mw->global_threading.reset();
+		}
+		return true;
+	}
+	if (DetectThreadBase::ID != 0) {
+		DetectThreadBase::stop();
+		if (mw->global_threading) {
+			mw->global_threading->wait();
+			mw->global_threading.reset();
+		}
+	}
+	return false;
 }
 // slots
 void MainWindow::cammera_slot()
@@ -171,6 +211,26 @@ void MainWindow::video_slot()
     dt->start();
 }
 
+void MainWindow::batch_folder_slot()
+{
+	if (prepare_thread(BatchImageDetectThread::ID, this)) {
+		return;
+	}
+	if (!this->check_model()) {
+		return;
+	}
+	QString dir = QFileDialog::getExistingDirectory(this, "选择图片文件夹", ".");
+	if (dir.isEmpty()) {
+		return;
+	}
+	BatchImageDetectThread* dt = new BatchImageDetectThread(*this, this->ui.islabel->isChecked(), dir);
+	QObject::connect(dt, &DetectThreadBase::frameReady, this, &MainWindow::onFrameReady);
+	QObject::connect(dt, &DetectThreadBase::detectionLog, this, &MainWindow::onDetectionLog);
+	QObject::connect(dt, &DetectThreadBase::recordReady, this, &MainWindow::onRecordReady);
+	this->global_threading.reset(dt);
+	dt->start();
+}
+
 void MainWindow::iou_spinbox_slot(double value)
 {
     this->ui.iou_slider->blockSignals(true);
@@ -220,6 +280,7 @@ void MainWindow::model_select_slot(int index)
 
 	// ...
 	if (index >= 1 && index <= 4) {
+		wait_and_clear_background_thread(this);
 		// OpenCV 原生模型
 		this->currentDetectorType = index - 1;
 		
@@ -244,13 +305,13 @@ void MainWindow::model_select_slot(int index)
 	}
 	
 	// YOLO ONNX 模型
+	wait_and_clear_background_thread(this);
 	this->currentDetectorType = -1; // Reset OpenCV detector type
 	float iou = this->ui.iou_spinbox->value();
 	float conf = this->ui.conf_spinbox->value();
-    // 加载模型
 
-    this->global_threading.reset(new WarmUpThread(*this, "weights/" + file, iou, conf, cv::Size(640, 640)));
-    this->global_threading->start();
+	this->global_threading.reset(new WarmUpThread(*this, "weights/" + file, iou, conf, cv::Size(640, 640)));
+	this->global_threading->start();
 }
 
 void MainWindow::import_model_button_slot()
@@ -278,8 +339,28 @@ void MainWindow::import_model_button_slot()
 
 void MainWindow::config_db_slot()
 {
-    DbConfigDialog dialog(this);
-    dialog.exec();
+	DbConfigDialog dialog(this);
+	if (dialog.exec() != QDialog::Accepted) {
+		return;
+	}
+	QSettings settings("config.ini", QSettings::IniFormat);
+	QString host = settings.value("Database/Host", "127.0.0.1").toString();
+	int port = settings.value("Database/Port", "3306").toInt();
+	QString dbName = settings.value("Database/Name", "defect_db").toString();
+	QString user = settings.value("Database/User", "root").toString();
+	QString password = settings.value("Database/Password", "root").toString();
+	DBManager::getInstance().closeDatabase();
+	if (DBManager::getInstance().connectToDatabase(host, dbName, user, password, port)) {
+		this->append_log("数据库已按新配置重新连接");
+	} else {
+		this->append_log("Error: 数据库重新连接失败");
+	}
+}
+
+void MainWindow::history_slot()
+{
+	HistoryDialog dlg(this);
+	dlg.exec();
 }
 
 void MainWindow::start_loading_movie_slot()
@@ -335,7 +416,9 @@ void MainWindow::connect_slots()
 	QObject::connect(ui.model_select, SIGNAL(activated(int)), this, SLOT(model_select_slot(int)));
 	QObject::connect(ui.import_model_button, SIGNAL(clicked()), this, SLOT(import_model_button_slot()));
     QObject::connect(ui.config_db_button, SIGNAL(clicked()), this, SLOT(config_db_slot()));
-    
+	QObject::connect(ui.batch_folder_button, SIGNAL(clicked()), this, SLOT(batch_folder_slot()));
+	QObject::connect(ui.history_records_button, SIGNAL(clicked()), this, SLOT(history_slot()));
+
 	QObject::connect(this, SIGNAL(start_loading_movie_signal()), this, SLOT(start_loading_movie_slot()));
 	QObject::connect(this, SIGNAL(stop_loading_movie_signal()), this, SLOT(stop_loading_movie_slot()));
 }
@@ -382,6 +465,7 @@ void MainWindow::disable_all_button()
 	this->ui.video_button->setDisabled(true);
 	this->ui.model_select->setDisabled(true);
 	this->ui.import_model_button->setDisabled(true);
+	this->ui.batch_folder_button->setDisabled(true);
 
 }
 
@@ -392,33 +476,43 @@ void MainWindow::enable_all_button()
 	this->ui.video_button->setDisabled(false);
 	this->ui.model_select->setDisabled(false);
 	this->ui.import_model_button->setDisabled(false);
+	this->ui.batch_folder_button->setDisabled(false);
+	this->ui.history_records_button->setDisabled(false);
 }
 
 bool MainWindow::check_model()
 {
-    if (this->currentDetectorType >= 0 && this->currentDetectorType <= 3) {
-        if (this->opencvDetector != nullptr) return true;
-        return false;
-    }
+	if (this->currentDetectorType >= 0 && this->currentDetectorType <= 3) {
+		if (this->opencvDetector != nullptr) {
+			return true;
+		}
+		QMessageBox::warning(this, "Error", "OpenCV 检测器未初始化");
+		return false;
+	}
 
-    // 加载模型
-    if (this->inference == nullptr and this->ui.model_select->count() == 0) {
-        QMessageBox::warning(this, "Error", QString("未找到模型"));
-        return false;
-    }
+	if (this->ui.model_select->count() == 0) {
+		QMessageBox::warning(this, "Error", QString("未找到模型"));
+		return false;
+	}
+	const QString cur = this->ui.model_select->currentText();
+	if (cur.isEmpty() || cur.startsWith(QLatin1String("==="))) {
+		QMessageBox::warning(this, "Error", QString("请先选择有效模型"));
+		return false;
+	}
+	if (this->inference == nullptr) {
+		QMessageBox::warning(this, "Error", QString("模型未加载完成，请稍候或重新选择模型"));
+		return false;
+	}
 
-	// 加载模型
-    std::string base_name = commons::get_base_name(this->ui.model_select->currentText().toStdString());
-    std::string txt_name = base_name + ".txt";
-    std::string txt_path = "weights/" + txt_name;
-    if (!QFile::exists(QString::fromStdString(txt_path))) {
-        QMessageBox::warning(this, "Error", QString::fromStdString(txt_name) + "不存在, 请导入...");
-        return false;
-    }
-    if (this->inference != nullptr) {
-        this->inference->loadClassesFromFile();
-    }
-    return true;
+	std::string base_name = commons::get_base_name(cur.toStdString());
+	std::string txt_name = base_name + ".txt";
+	std::string txt_path = "weights/" + txt_name;
+	if (!QFile::exists(QString::fromStdString(txt_path))) {
+		QMessageBox::warning(this, "Error", QString::fromStdString(txt_name) + "不存在, 请导入...");
+		return false;
+	}
+	this->inference->loadClassesFromFile();
+	return true;
 }
 
 void MainWindow::load_model_from_model_list()
@@ -462,5 +556,7 @@ void MainWindow::onDetectionLog(QString log)
 
 void MainWindow::onRecordReady(DetectionRecord record)
 {
-    DBManager::getInstance().insertRecord(record);
+	if (!DBManager::getInstance().insertRecord(record)) {
+		this->append_log("Warning: 检测记录写入数据库失败（请检查 MySQL 与配置）");
+	}
 }

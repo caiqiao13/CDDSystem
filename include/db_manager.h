@@ -2,6 +2,7 @@
 #define DB_MANAGER_H
 
 #include <QString>
+#include <QList>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
@@ -23,6 +24,7 @@ public:
 
     bool connectToDatabase(const QString& host, const QString& dbName, const QString& user, const QString& password, int port = 3306);
     bool insertRecord(const DetectionRecord& record);
+    QList<DetectionRecord> fetchRecentRecords(int limit = 1000);
     void closeDatabase();
 
 private:

@@ -23,7 +23,7 @@ public:
 	int currentDetectorType{ -1 };      // ???????????? (0-3: OpenCV, 4+: ONNX)
 
 	void closeEvent(QCloseEvent* event);// ?????????
-	void append_log(QString text);		// ???
+	Q_INVOKABLE void append_log(QString text);
 	void show_img(QString& path);		// ?????
 	void show_img(QPixmap& pixmap);		// ?????
 	void show_img(QPixmap&& pixmap);	// ?????, ???????
@@ -42,7 +42,7 @@ private slots:
 	void cammera_slot();
 	void image_slot();
 	void video_slot();
-
+	void batch_folder_slot();
 
 	// ????spinbox
 	void iou_spinbox_slot(double value);
@@ -64,6 +64,7 @@ private slots:
 
 	// ???????????
 	void config_db_slot();
+	void history_slot();
 
 	// ???????
 	void start_loading_movie_slot();
@@ -84,8 +85,12 @@ public:
 	bool check_model();						// ??????
 	void load_model_from_model_list();		// ????????????????
 
-MainWindow();
-~MainWindow();
+private:
+	void select_default_model();
+
+public:
+	MainWindow();
+	~MainWindow();
 
 };
 
